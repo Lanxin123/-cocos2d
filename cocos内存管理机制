@@ -1,0 +1,165 @@
+cocos2d-x中的内存管理机制可以看成一个基于智能指针的变体。
+垃圾回收+智能指针
+
+1.引用计数(Ref基类)
+class CC_DLL Ref
+{
+public:
+	void retain();
+	void release();
+	Ref* autorelease();
+	unsigned int getReferenceCount() const;
+protected:
+	Ref();
+protected:
+	unsigned in _refrenceCount;
+	friend class AutoreleasePool;
+}
+当一个对象由new分配内存时，其引用计数为1，调用reatin()方法会增加其引用计数，调用release()方法则会减少其引用计数，
+release()方法在其引用计数为0时自动调用delete删除对象并释放内存。
+
+2.用autorelease()声明一个"智能指针"
+Cocos2d-x使用autorelease()方法来声明一个智能指针，这些指针并不是单独关联某个自动变量，而是全部被加入到一个AutoreleasePool中，
+在每一帧结束时对加入AutoreleasePool中，在每一帧结束时对加入AutoreleasePool中的对象进行清理。所以cocos2d-x中，智能指针的生命周期为1帧。
+
+Ref* Ref::autorelease()
+{
+	PoolManager::getInstance()->getCurrentPool()->addObject(this);
+}
+
+//主循环
+void DisplayLinkDirector::mainLoop()
+{
+	if(!_invalid)
+	{
+		drawSence();//绘制
+		PoolManager::getInstance()->getCurrentPool().clear();//清理
+	}	
+}
+
+void AyrireleasePool::clear()
+{
+	for(const auto &obj : _managedObjectArray)
+	{
+		obj->release();
+	}
+	_managedObjectArray.clear();
+}
+
+3.AutoreleasPool队列
+自定义AutorelasePool生命周期，AutoreleasePool由PoolManager管理。
+用完即释放，不必等到一帧结束后同时释放，这样可保证最大同时运行数大大降低，提高效率。
+AutoreleasePool::AutoreleasePool() : _name("")
+{
+	_managedObjectArray.reserve(150);
+	PoolManager::getInstance()->push(this);	
+}
+
+AutoreleasePool::~AutoreleasePool()
+{
+	clear();
+	PoolManager::getInstance()->pop();
+}
+
+示例：
+Class MyClass : public Ref
+{
+	static MyClass* create(){
+		auto ref = new MyClass()
+		return ref->autorelease();
+	}
+}
+
+void customAutoreleasePool()
+{
+	AutoreleasePool pool;
+	auto ref1 = MyClass::create();
+	auto ref2 = MyClass::create();
+}
+
+Cocos2d-x中的智能指针
+
+Node将所有的子元素存在一个Vector<*Node>中。Vector和Map对新加入的元素执行retain操作，并对从中移除的元素执行release操作。这样，元素在被从Vector或Map中移除的时候就会被自动释放。
+但对于单个的非集合元素对象，一般不会使用Autorelease进行管理，原因上面有提到，除非是一个临时对象。这是我们只能手动使用retain和release进行管理，这相当于new和delete，很容易导致内存管理问题。
+
+因此，Cocos2d-x加入了智能指针RefPtr<T>，RefPtr<T>实际是模仿shared_ptr的，但比shared_ptr轻量，并且能和Cocos2d-x的内存管理模型相结合。Cocos2d-x没有提供unique_ptr和weak_ptr的功能类似的智能指针。
+RefPtr<T>线程不安全
+RefPtr<T>需要依赖Ref的引用计数来管理内存，所有类型T必须是Ref类型。RefPtr变量和Ref指针是一种强引用关系，所以这些构造函数会对任何值不是nullptr的Ref指针增加其引用计数，除非是一个右值。
+
+//构造函数 当c++构造函数中只有一个参数时 也可称为转换函数
+RefPtr<__String> ref2(cocos2d::String::create("Hello"));
+CC_ASSERT(strcmp("Hello", ref2->getCString()) == 0);
+CC_ASSERT(2 == ref2->getReferenceCount);
+
+//拷贝构造函数
+RefPtr<__String> ref4(ref2);
+CC_ASSERT(strcmp("Hello", ref4->getCString()) == 0);
+CC_ASSERT(3 == ref2->getReferenceCount());
+CC_ASSERT(3 == ref4->getReferenceCount());
+
+RefPtr<__String> getRefPtr()
+{
+	RefPtr<__String> ref2(cocos2d::String::create("Hello"));
+	CC_ASSERT(strcmp("Hello", ref2->getCString()) == 0);
+	CC_ASSERT(3 == ref2->getReferenceCount());
+	return ref2;
+}
+
+//移动拷贝构造函数
+RefPtr<__String> ref4(getRefPtr());
+CC_ASSERT(strcmp("Hello", ref4->getCString()) == 0);
+CC_ASSERT(2 == ref4->getReferenceCount());
+
+getRefPtr()返回的是一个右值的RefPtr<__String>智能指针，只会转移内存的管理权，而不是去共享，且不会增加引用计数。
+
+无论是拷贝构造函数，还是赋值操作符，RefPtr都会对任何非空的左值的资源保持强引用关系。而有时候我们仍希望左值保持一种弱引用关系。
+如：
+Ref<cocos2d::Image> image;
+image = new cocos2d::Image();
+image->release();
+
+或：
+template<typename T> class RefPtr
+{
+public:
+	inline void weakAssign(const RefPtr<T> & other)
+	{
+		CC_REF_PTR_SAFE_RELEASE(_ptr);
+		_ptr = other._ptr;
+	}
+	
+};
+
+RefPtr()的其他操作：
+1.reset()，释放对其资源的占用
+2."*"，RefPtr重载了"*"操作符，使其能直接访问资源的地址
+
+RefPtr<T>的缺陷：
+1.引用技术可以被RefPtr从外部控制
+2.虽然RefPtr提供了一种弱引用，但是这种弱引用的智能指针仍然表现为一个强类型指针的行为，它仍可以对其资源进行修改，从而导致原智能指针的行为变得不可以预期。
+
+auto str = new __String("Hello");
+RefPtr<__String> ptr;
+ptr.weakAssign(str);
+str.release();
+ptr->getCString();	//野指针
+
+RefPtr<__String> ptr1(new __String("Hello"));//引用计数为2
+RefPtr<__String> ptr2;
+ptr2.weakAssign(ptr1)
+ptr2.release();
+ptr2.release();
+ptr1->getCString();//报错	
+
+怎样进行内存管理：
+
+1.Ref引用计数并不是线程安全的，在多线程中仍需要使用互斥锁。
+2.对于自定义Node的子类型，为类型添加create()方法，并不是该方法返回一个autorelease对象
+3.对于自定义的数据类型，如果需要动态分配内存，继承自Ref，使用智能指针RefPtr来管理其内存的释放
+4.对只在一个对方内部使用的Ref对象，需要使用自动回收池的，应该使用自定义的AutoreleasePool来即时清理对内存的占用
+5.不要动态分配AutoreleasePool对象，始终使用自动变量
+6.不要显示调用RefPtr的构造函数，始终使用隐式方式调用构造函数，因为显式的构造函数会导致同时执行构造函数和赋值操作符，造成一次不必要的临时智能指针变量的产生。
+
+
+
+

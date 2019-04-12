@@ -1,0 +1,25 @@
+cocos2d-x中的内存管理机制可以看成一个基于智能指针的变体。
+垃圾回收+智能指针
+
+1.引用计数(Ref基类)
+class CC_DLL Ref
+{
+public:
+	void retain();
+	void release();
+	Ref* autorelease();
+	unsigned int getReferenceCount() const;
+protected:
+	Ref();
+protected:
+	unsigned in _refrenceCount;
+	friend class AutoreleasePool;
+}
+当一个对象由new分配内存时，其引用计数为1，调用reatin()方法会增加其引用计数，调用release()方法则会减少其引用计数，
+release()方法在其引用计数为0时自动调用delete删除对象并释放内存。
+
+2.用autorelease()声明一个"智能指针"
+
+
+
+
